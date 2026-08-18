@@ -62,4 +62,14 @@ def delete_student(student_id):
 if __name__ == '__main__':
     app.run(host="0.0.0.0", debug=True, port=5000)
 
-
+@app.route('/health')
+def health():
+    try:
+        # Fetch the Mongo URI from environment variables
+        mongo_uri = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/')
+        # Attempt to connect to the database with a short timeout
+        client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
+        client.server_info() # This forces a connection check
+        return jsonify(status="healthy", database="connected"), 200
+    except Exception as e:
+        return jsonify(status="unhealthy", database="disconnected", error=str(e)), 500
