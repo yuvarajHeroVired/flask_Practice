@@ -1,0 +1,145 @@
+name: Flask CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: flask-app-repo
+
+jobs:
+  test:
+    name: Test Application
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest
+
+  build-and-deploy:
+    name: Build, Push, and Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build and Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Deploy to EC2 and Verify
+        uses: appleboy/ssh-action@v1.0.0
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_REGISTRY,IMAGE_TAG,ECR_REPOSITORY
+          script: |
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
+            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            
+            docker stop my-flask-app || true
+            docker rm my-flask-app || true
+            
+            docker run -d --name my-flask-app --restart unless-stopped -p 5000:5000 $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            
+            echo "Waiting for container to start..."
+            sleep 5
+            HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}\n" http://localhost:5000/health)
+            if [ "$HTTP_STATUS" -ne 200 ]; then
+              echo "Health check failed with status $HTTP_STATUS"
+              exit 1
+            fi
+            echo "Health check passed!"
+
+  notify:
+    name: Send Notification
+    needs: [test, build-and-deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine Failure Stage
+        if: failure()
+        run: |
+          if [ "${{ needs.test.result }}" == "failure" ]; then
+            echo "FAILED_STAGE=Test Stage (pytest)" >> $GITHUB_ENV
+          elif [ "${{ needs.build-and-deploy.result }}" == "failure" ]; then
+            echo "FAILED_STAGE=Build/Deploy Stage" >> $GITHUB_ENV
+          else
+            echo "FAILED_STAGE=Unknown Stage" >> $GITHUB_ENV
+          fi
+
+      - name: Send Success Email
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "[SUCCESS] CI/CD Pipeline Deployed"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: GitHub Actions Bot
+          body: |
+            Deployment Successful!
+            
+            Branch: ${{ github.ref_name }}
+            Commit SHA: ${{ github.sha }}
+            Docker Image Tag: ${{ github.sha }}
+            EC2 Target: ${{ secrets.EC2_HOST }}
+            
+            View Pipeline Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send Failure Email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "[FAILURE] CI/CD Pipeline Failed"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: GitHub Actions Bot
+          body: |
+            Pipeline Execution Failed!
+            
+            Failed Stage: ${{ env.FAILED_STAGE }}
+            Branch: ${{ github.ref_name }}
+            Commit SHA: ${{ github.sha }}
+            
+            Investigate immediately here: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
