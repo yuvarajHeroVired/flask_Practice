@@ -9,6 +9,7 @@ def client():
 
     # Setup: clear and create test data
     with app.app_context():
+        mongo.db = mongo.cx['student_db']
         mongo.db.students.delete_many({})
         mongo.db.students.insert_one({
             "_id": ObjectId("66fddff25f4b5f6a0a123456"),
