@@ -28,6 +28,11 @@ jobs:
 
       - name: Run pytest
         run: pytest
+        
+      - name: Run pytest
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: pytest
 
   build-and-deploy:
     name: Build, Push, and Deploy
@@ -61,11 +66,12 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: ECR_REGISTRY,IMAGE_TAG,ECR_REPOSITORY
+          envs: ECR_REGISTRY,IMAGE_TAG,ECR_REPOSITORY,MONGO_URI
           script: |
             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
             docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
@@ -73,7 +79,7 @@ jobs:
             docker stop my-flask-app || true
             docker rm my-flask-app || true
             
-            docker run -d --name my-flask-app --restart unless-stopped -p 5000:5000 $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            docker run -d --name my-flask-app --restart unless-stopped -p 5000:5000 -e MONGO_URI="$MONGO_URI" $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
             
             echo "Waiting for container to start..."
             sleep 5
