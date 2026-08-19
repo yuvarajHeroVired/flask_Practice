@@ -80,7 +80,6 @@ jobs:
             
             echo "Waiting for container to start..."
             sleep 5
-            HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}\n" http://localhost:5000/health)
             if [ "$HTTP_STATUS" -ne 200 ]; then
               echo "Health check failed with status $HTTP_STATUS"
               exit 1
