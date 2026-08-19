@@ -4,6 +4,7 @@ from bson.objectid import ObjectId
 from dotenv import load_dotenv
 import certifi
 import os
+import pymongo
 
 # Load env vars
 load_dotenv()
